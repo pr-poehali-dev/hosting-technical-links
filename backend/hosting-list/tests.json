@@ -1,0 +1,12 @@
+{
+  "tests": [
+    {
+      "name": "Get hostings list",
+      "method": "GET",
+      "path": "/",
+      "expectedStatus": 200,
+      "expectedBody": {"hostings": []},
+      "bodyMatcher": "partial"
+    }
+  ]
+}

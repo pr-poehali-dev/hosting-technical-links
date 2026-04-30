@@ -1,0 +1,22 @@
+{
+  "tests": [
+    {
+      "name": "Create hosting with name",
+      "method": "POST",
+      "path": "/",
+      "body": {"name": "Тестовый портал"},
+      "expectedStatus": 200,
+      "expectedBody": {"id": "string", "tech_url": "string", "domain_ru": "string"},
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "Create hosting without name",
+      "method": "POST",
+      "path": "/",
+      "body": {},
+      "expectedStatus": 200,
+      "expectedBody": {"id": "string"},
+      "bodyMatcher": "partial"
+    }
+  ]
+}

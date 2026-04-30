@@ -1,7 +1,11 @@
-import { useState } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import Icon from '@/components/ui/icon';
 
-type Section = 'home' | 'about' | 'instructions' | 'contacts' | 'faq' | 'support';
+const API_CREATE = 'https://functions.poehali.dev/5c7a2bf0-d8ee-4a94-9b09-ca1b8909d904';
+const API_UPLOAD = 'https://functions.poehali.dev/ee010c7a-b47e-485f-80d9-21e381a45766';
+const API_LIST   = 'https://functions.poehali.dev/917a1d7e-b91e-42f8-bd8b-f27b91a09018';
+
+type Section = 'home' | 'about' | 'instructions' | 'contacts' | 'faq' | 'support' | 'hosting';
 
 interface Notification {
   id: string;
@@ -49,6 +53,98 @@ export default function Index() {
   const [supportForm, setSupportForm] = useState({ name: '', email: '', message: '' });
   const [notifFilter, setNotifFilter] = useState<string>('all');
 
+  // Hosting state
+  interface HostingFile { id: string; original_name: string; content_type: string; size_bytes: number; cdn_url: string; uploaded_at: string; }
+  interface Hosting { id: string; name: string; domain_ru: string; tech_url: string; created_at: string; file_count: number; total_size: number; files: HostingFile[]; }
+
+  const [hostings, setHostings] = useState<Hosting[]>([]);
+  const [hostingLoading, setHostingLoading] = useState(false);
+  const [hostingName, setHostingName] = useState('');
+  const [creatingHosting, setCreatingHosting] = useState(false);
+  const [newHosting, setNewHosting] = useState<Hosting | null>(null);
+  const [uploadingTo, setUploadingTo] = useState<string | null>(null);
+  const [uploadProgress, setUploadProgress] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [activeHostingId, setActiveHostingId] = useState<string | null>(null);
+  const [hostingError, setHostingError] = useState('');
+
+  const loadHostings = useCallback(async () => {
+    setHostingLoading(true);
+    try {
+      const res = await fetch(API_LIST);
+      const data = await res.json();
+      setHostings(data.hostings || []);
+    } catch {
+      setHostingError('Не удалось загрузить список хостингов');
+    } finally {
+      setHostingLoading(false);
+    }
+  }, []);
+
+  const createHosting = async () => {
+    if (!hostingName.trim()) return;
+    setCreatingHosting(true);
+    setHostingError('');
+    try {
+      const res = await fetch(API_CREATE, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: hostingName.trim() }),
+      });
+      const data = await res.json();
+      setNewHosting(data);
+      setHostingName('');
+      await loadHostings();
+      setActiveHostingId(data.id);
+    } catch {
+      setHostingError('Ошибка создания хостинга');
+    } finally {
+      setCreatingHosting(false);
+    }
+  };
+
+  const uploadFile = async (hostingId: string, file: File) => {
+    setUploadingTo(hostingId);
+    setUploadProgress('Загрузка...');
+    try {
+      const b64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = reader.result as string;
+          resolve(result.split(',')[1]);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+
+      const res = await fetch(API_UPLOAD, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          hosting_id: hostingId,
+          filename: file.name,
+          file_data: b64,
+          content_type: file.type || 'application/octet-stream',
+        }),
+      });
+      if (!res.ok) throw new Error('upload failed');
+      setUploadProgress('Файл загружен!');
+      await loadHostings();
+      setTimeout(() => setUploadProgress(''), 2000);
+    } catch {
+      setUploadProgress('Ошибка загрузки');
+      setTimeout(() => setUploadProgress(''), 3000);
+    } finally {
+      setUploadingTo(null);
+    }
+  };
+
+  const formatBytes = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} Б`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} КБ`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} МБ`;
+  };
+
   const navItems: { id: Section; label: string }[] = [
     { id: 'home', label: 'Главная' },
     { id: 'about', label: 'О сервисе' },
@@ -56,6 +152,7 @@ export default function Index() {
     { id: 'contacts', label: 'Контакты' },
     { id: 'faq', label: 'Вопросы и ответы' },
     { id: 'support', label: 'Техническая поддержка' },
+    { id: 'hosting', label: 'Хостинг файлов' },
   ];
 
   const filteredNotifications = notifFilter === 'all'
@@ -66,6 +163,9 @@ export default function Index() {
     setActiveSection(s);
     setMobileMenu(false);
     window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (s === 'hosting' && hostings.length === 0) {
+      loadHostings();
+    }
   };
 
   return (
@@ -187,6 +287,13 @@ export default function Index() {
                     >
                       <Icon name="BookOpen" size={18} />
                       Инструкция
+                    </button>
+                    <button
+                      onClick={() => goto('hosting')}
+                      className="flex items-center gap-2 px-6 py-3 font-medium text-white bg-[#1A7A1A] rounded hover:bg-[#155c15] transition-colors"
+                    >
+                      <Icon name="Server" size={18} />
+                      Хостинг файлов
                     </button>
                   </div>
                 </div>
@@ -539,6 +646,214 @@ export default function Index() {
                   Написать в поддержку
                 </button>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* HOSTING */}
+        {activeSection === 'hosting' && (
+          <div className="gov-container py-10">
+            <div className="animate-fade-in-up">
+              <div className="section-divider"></div>
+              <h1 className="text-3xl font-bold text-[#0D1C3D] mb-2">Хостинг файлов</h1>
+              <p className="text-[#6B7280] mb-8">Создайте хостинг — загружайте файлы и получайте ссылки</p>
+
+              {/* Create hosting form */}
+              <div className="bg-white border border-[#D1D9E6] rounded-lg p-6 mb-8">
+                <h2 className="font-bold text-[#0D1C3D] mb-4 flex items-center gap-2">
+                  <Icon name="Plus" size={18} className="text-[#003087]" />
+                  Создать новый хостинг
+                </h2>
+                <div className="flex gap-3 flex-wrap">
+                  <input
+                    type="text"
+                    value={hostingName}
+                    onChange={e => setHostingName(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && createHosting()}
+                    placeholder="Название хостинга (например: Мой портал)"
+                    className="flex-1 min-w-[200px] px-3 py-2.5 text-sm border border-[#D1D9E6] rounded focus:outline-none focus:border-[#003087] focus:ring-1 focus:ring-[#003087]"
+                  />
+                  <button
+                    onClick={createHosting}
+                    disabled={creatingHosting || !hostingName.trim()}
+                    className="flex items-center gap-2 px-5 py-2.5 bg-[#003087] text-white text-sm font-semibold rounded hover:bg-[#0050C8] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {creatingHosting ? <Icon name="Loader" size={16} className="animate-spin" /> : <Icon name="Plus" size={16} />}
+                    Создать
+                  </button>
+                  <button
+                    onClick={loadHostings}
+                    disabled={hostingLoading}
+                    className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-[#003087] border border-[#003087] rounded hover:bg-[#EEF3FF] transition-colors"
+                  >
+                    <Icon name={hostingLoading ? 'Loader' : 'RefreshCw'} size={16} className={hostingLoading ? 'animate-spin' : ''} />
+                    Обновить
+                  </button>
+                </div>
+                {hostingError && (
+                  <div className="mt-3 text-sm text-[#CC2200] flex items-center gap-2">
+                    <Icon name="AlertCircle" size={14} />
+                    {hostingError}
+                  </div>
+                )}
+              </div>
+
+              {/* New hosting banner */}
+              {newHosting && (
+                <div className="bg-[#EAF6EA] border border-[#A8D8A8] rounded-lg p-5 mb-6">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <div className="flex items-center gap-2 mb-2">
+                        <Icon name="CheckCircle" size={18} className="text-[#1A7A1A]" />
+                        <span className="font-bold text-[#1A7A1A] text-sm">Хостинг создан успешно!</span>
+                      </div>
+                      <div className="space-y-2">
+                        <div>
+                          <span className="text-xs text-[#6B7280] uppercase tracking-wide font-semibold">Техническая ссылка:</span>
+                          <div className="font-mono text-sm text-[#003087] bg-white border border-[#D1D9E6] rounded px-3 py-1.5 mt-1 break-all">{newHosting.tech_url}</div>
+                        </div>
+                        <div>
+                          <span className="text-xs text-[#6B7280] uppercase tracking-wide font-semibold">Домен .РФ:</span>
+                          <div className="font-mono text-sm text-[#1A7A1A] bg-white border border-[#D1D9E6] rounded px-3 py-1.5 mt-1">{newHosting.domain_ru}</div>
+                        </div>
+                      </div>
+                    </div>
+                    <button onClick={() => setNewHosting(null)} className="text-[#6B7280] hover:text-[#374151]">
+                      <Icon name="X" size={18} />
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Hostings list */}
+              {hostingLoading && hostings.length === 0 ? (
+                <div className="bg-white border border-[#D1D9E6] rounded-lg p-12 text-center">
+                  <Icon name="Loader" size={32} className="text-[#003087] mx-auto mb-3 animate-spin" />
+                  <p className="text-[#6B7280] text-sm">Загрузка хостингов...</p>
+                </div>
+              ) : hostings.length === 0 ? (
+                <div className="bg-white border border-[#D1D9E6] rounded-lg p-12 text-center">
+                  <Icon name="Server" size={40} className="text-[#D1D9E6] mx-auto mb-3" />
+                  <p className="text-[#9CA3AF] text-sm mb-1">Хостингов пока нет</p>
+                  <p className="text-xs text-[#C0C8D8]">Создайте первый хостинг выше</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {hostings.map(h => (
+                    <div key={h.id} className="bg-white border border-[#D1D9E6] rounded-lg overflow-hidden">
+                      {/* Hosting header */}
+                      <div
+                        className="flex items-start justify-between gap-4 p-5 cursor-pointer hover:bg-[#F8FAFC] transition-colors"
+                        onClick={() => setActiveHostingId(activeHostingId === h.id ? null : h.id)}
+                      >
+                        <div className="flex items-start gap-4 min-w-0">
+                          <div className="w-10 h-10 bg-[#EEF3FF] rounded-lg flex items-center justify-center flex-shrink-0">
+                            <Icon name="Server" size={20} className="text-[#003087]" />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="font-bold text-[#0D1C3D] text-sm mb-1">{h.name}</div>
+                            <div className="space-y-0.5">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-xs text-[#6B7280]">Ссылка:</span>
+                                <span className="font-mono text-xs text-[#003087] truncate max-w-[300px]">{h.tech_url}</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs text-[#6B7280]">Домен .РФ:</span>
+                                <span className="font-mono text-xs text-[#1A7A1A]">{h.domain_ru}</span>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-4 flex-shrink-0">
+                          <div className="text-right hidden md:block">
+                            <div className="text-sm font-semibold text-[#0D1C3D]">{h.file_count} файл{h.file_count === 1 ? '' : h.file_count < 5 ? 'а' : 'ов'}</div>
+                            <div className="text-xs text-[#9CA3AF]">{formatBytes(h.total_size)}</div>
+                          </div>
+                          <Icon name={activeHostingId === h.id ? 'ChevronUp' : 'ChevronDown'} size={18} className="text-[#9CA3AF]" />
+                        </div>
+                      </div>
+
+                      {/* Expanded: files + upload */}
+                      {activeHostingId === h.id && (
+                        <div className="border-t border-[#F0F2F6] p-5">
+                          {/* Upload zone */}
+                          <div
+                            className="border-2 border-dashed border-[#C0D0F0] rounded-lg p-6 text-center mb-5 hover:border-[#003087] hover:bg-[#F8FAFF] transition-all cursor-pointer"
+                            onClick={() => fileInputRef.current && (fileInputRef.current.dataset.hostingId = h.id) && fileInputRef.current.click()}
+                            onDragOver={e => e.preventDefault()}
+                            onDrop={async e => {
+                              e.preventDefault();
+                              const file = e.dataTransfer.files[0];
+                              if (file) await uploadFile(h.id, file);
+                            }}
+                          >
+                            {uploadingTo === h.id ? (
+                              <div className="flex items-center justify-center gap-3">
+                                <Icon name="Loader" size={22} className="text-[#003087] animate-spin" />
+                                <span className="text-sm text-[#003087] font-medium">{uploadProgress}</span>
+                              </div>
+                            ) : (
+                              <>
+                                <Icon name="Upload" size={28} className="text-[#C0D0F0] mx-auto mb-2" />
+                                <div className="text-sm font-medium text-[#374151]">Перетащите файл или нажмите для выбора</div>
+                                <div className="text-xs text-[#9CA3AF] mt-1">Любой формат, до 10 МБ</div>
+                              </>
+                            )}
+                          </div>
+
+                          {/* Files list */}
+                          {h.files.length > 0 ? (
+                            <div className="space-y-2">
+                              <div className="text-xs font-semibold text-[#6B7280] uppercase tracking-wide mb-2">Загруженные файлы ({h.files.length})</div>
+                              {h.files.map(f => (
+                                <div key={f.id} className="flex items-center justify-between gap-3 p-3 bg-[#F8FAFC] rounded-lg border border-[#EEF0F5]">
+                                  <div className="flex items-center gap-3 min-w-0">
+                                    <div className="w-8 h-8 bg-white border border-[#D1D9E6] rounded flex items-center justify-center flex-shrink-0">
+                                      <Icon name={f.content_type.startsWith('image/') ? 'Image' : f.content_type.includes('pdf') ? 'FileText' : 'File'} size={14} className="text-[#6B7280]" />
+                                    </div>
+                                    <div className="min-w-0">
+                                      <div className="text-sm font-medium text-[#0D1C3D] truncate">{f.original_name}</div>
+                                      <div className="text-xs text-[#9CA3AF]">{formatBytes(f.size_bytes)}</div>
+                                    </div>
+                                  </div>
+                                  <a
+                                    href={f.cdn_url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-[#003087] border border-[#C0D0F0] rounded hover:bg-[#EEF3FF] transition-colors flex-shrink-0"
+                                    onClick={e => e.stopPropagation()}
+                                  >
+                                    <Icon name="ExternalLink" size={12} />
+                                    Открыть
+                                  </a>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="text-center py-4 text-[#9CA3AF] text-sm">
+                              <Icon name="Inbox" size={24} className="mx-auto mb-2 text-[#D1D9E6]" />
+                              Файлы ещё не загружены
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Hidden file input */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                className="hidden"
+                onChange={async e => {
+                  const file = e.target.files?.[0];
+                  const hid = fileInputRef.current?.dataset.hostingId;
+                  if (file && hid) await uploadFile(hid, file);
+                  if (fileInputRef.current) fileInputRef.current.value = '';
+                }}
+              />
             </div>
           </div>
         )}
